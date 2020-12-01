@@ -21,12 +21,11 @@ mod workspace;
 
 use self::workspace::ManifestPath;
 
+use crate::cmd::{BuildCommand, CheckCommand};
+
 #[cfg(feature = "extrinsics")]
 use sp_core::{crypto::Pair, sr25519, H256};
-use std::{
-    convert::{TryFrom, TryInto},
-    path::PathBuf,
-};
+use std::{convert::TryFrom, path::PathBuf};
 #[cfg(feature = "extrinsics")]
 use subxt::PairSigner;
 
@@ -93,8 +92,8 @@ impl ExtrinsicOpts {
     }
 }
 
-#[derive(Debug, StructOpt)]
-struct VerbosityFlags {
+#[derive(Clone, Debug, StructOpt)]
+pub struct VerbosityFlags {
     #[structopt(long)]
     quiet: bool,
     #[structopt(long)]
@@ -120,7 +119,7 @@ impl TryFrom<&VerbosityFlags> for Option<Verbosity> {
     }
 }
 
-#[derive(Debug, StructOpt)]
+#[derive(Clone, Debug, StructOpt)]
 struct UnstableOptions {
     /// Use the original manifest (Cargo.toml), do not modify for build optimizations
     #[structopt(long = "unstable-options", short = "Z", number_of_values = 1)]
@@ -295,42 +294,13 @@ enum Command {
     },
     /// Compiles the contract, generates metadata, bundles both together in a `<name>.contract` file
     #[structopt(name = "build")]
-    Build {
-        /// Path to the Cargo.toml of the contract to build
-        #[structopt(long, parse(from_os_str))]
-        manifest_path: Option<PathBuf>,
-        /// Which build artifacts to generate.
-        ///
-        /// - `all`: Generate the Wasm, the metadata and a bundled `<name>.contract` file.
-        ///
-        /// - `code-only`: Only the Wasm is created, generation of metadata and a bundled
-        ///   `<name>.contract` file is skipped.
-        #[structopt(
-            long = "generate",
-            default_value = "all",
-            value_name = "all | code-only",
-            verbatim_doc_comment
-        )]
-        build_artifact: GenerateArtifacts,
-        #[structopt(flatten)]
-        verbosity: VerbosityFlags,
-        #[structopt(flatten)]
-        unstable_options: UnstableOptions,
-    },
+    Build(BuildCommand),
     /// Command has been deprecated, use `cargo contract build` instead
     #[structopt(name = "generate-metadata")]
     GenerateMetadata {},
     /// Check that the code builds as Wasm; does not output any build artifact to the top level `target/` directory
     #[structopt(name = "check")]
-    Check {
-        /// Path to the Cargo.toml of the contract to build
-        #[structopt(long, parse(from_os_str))]
-        manifest_path: Option<PathBuf>,
-        #[structopt(flatten)]
-        verbosity: VerbosityFlags,
-        #[structopt(flatten)]
-        unstable_options: UnstableOptions,
-    },
+    Check(CheckCommand),
     /// Test the smart contract off-chain
     #[structopt(name = "test")]
     Test {},
@@ -396,37 +366,16 @@ fn main() {
 fn exec(cmd: Command) -> Result<String> {
     match &cmd {
         Command::New { name, target_dir } => cmd::new::execute(name, target_dir.as_ref()),
-        Command::Build {
-            manifest_path,
-            verbosity,
-            build_artifact,
-            unstable_options,
-        } => {
-            let manifest_path = ManifestPath::try_from(manifest_path.as_ref())?;
-            let result = cmd::build::execute(
-                &manifest_path,
-                verbosity.try_into()?,
-                true,
-                *build_artifact,
-                unstable_options.try_into()?,
-            )?;
-
-            Ok(build_artifact.display(&result))
+        Command::Build(build) => {
+            let result = build.exec()?;
+            Ok(build.build_artifact.display(&result))
         }
-        Command::Check {
-            manifest_path,
-            verbosity,
-            unstable_options,
-        } => {
-            let manifest_path = ManifestPath::try_from(manifest_path.as_ref())?;
-            let res = cmd::build::execute(
-                &manifest_path,
-                verbosity.try_into()?,
-                false,
-                GenerateArtifacts::CodeOnly,
-                unstable_options.try_into()?,
-            )?;
-            assert!(res.dest_wasm.is_none(), "no dest_wasm should exist");
+        Command::Check(check) => {
+            let res = check.exec()?;
+            assert!(
+                res.dest_wasm.is_none(),
+                "no dest_wasm must be on the generation result"
+            );
             Ok("\nYour contract's code was built successfully.".to_string())
         }
         Command::GenerateMetadata {} => Err(anyhow::anyhow!(
